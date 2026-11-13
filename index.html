@@ -1152,6 +1152,46 @@ for (let i = 0; i < 2; i++) {
   gm.rotation.x = Math.PI / 2; gm.position.z = 0.03; grip.add(gm); scene.add(grip);
   c.addEventListener('connected', e => { gm.visible = !e.data.hand; });
 }
+// ---- manos virtuales (hand tracking): articulaciones + huesos, sin modelos externos
+const FINGERS = [
+  ['thumb-metacarpal', 'thumb-phalanx-proximal', 'thumb-phalanx-distal', 'thumb-tip'],
+  ['index-finger-metacarpal', 'index-finger-phalanx-proximal', 'index-finger-phalanx-intermediate', 'index-finger-phalanx-distal', 'index-finger-tip'],
+  ['middle-finger-metacarpal', 'middle-finger-phalanx-proximal', 'middle-finger-phalanx-intermediate', 'middle-finger-phalanx-distal', 'middle-finger-tip'],
+  ['ring-finger-metacarpal', 'ring-finger-phalanx-proximal', 'ring-finger-phalanx-intermediate', 'ring-finger-phalanx-distal', 'ring-finger-tip'],
+  ['pinky-finger-metacarpal', 'pinky-finger-phalanx-proximal', 'pinky-finger-phalanx-intermediate', 'pinky-finger-phalanx-distal', 'pinky-finger-tip']];
+const BONES = []; for (const ch of FINGERS) { BONES.push(['wrist', ch[0]]); for (let i = 0; i < ch.length - 1; i++) BONES.push([ch[i], ch[i + 1]]); }
+const handJointGeo = new THREE.SphereGeometry(1, 12, 10), handBoneGeo = new THREE.CylinderGeometry(1, 1, 1, 10);
+const handMat = new THREE.MeshStandardMaterial({ color: 0xcfe6ff, roughness: 0.5, metalness: 0.05, emissive: 0x0a2a5a, emissiveIntensity: 0.35 });
+const tipMat = new THREE.MeshStandardMaterial({ color: 0x00d4fd, emissive: 0x00d4fd, emissiveIntensity: 0.6 });
+const handVis = [];
+for (let i = 0; i < 2; i++) {
+  const g = new THREE.Group(); scene.add(g);
+  const joints = {}, bones = [];
+  for (const n of ['wrist', ...FINGERS.flat()]) { const m = new THREE.Mesh(handJointGeo, n === 'index-finger-tip' ? tipMat : handMat); m.visible = false; g.add(m); joints[n] = m; }
+  for (let k = 0; k < BONES.length; k++) { const m = new THREE.Mesh(handBoneGeo, handMat); m.visible = false; g.add(m); bones.push(m); }
+  handVis.push({ joints, bones });
+}
+const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _up = new THREE.Vector3(0, 1, 0);
+function updateHands() {
+  for (let i = 0; i < 2; i++) {
+    const h = hands[i], v = handVis[i], J = h && h.joints;
+    const active = !!(J && J['wrist'] && J['wrist'].visible);
+    for (const n in v.joints) {
+      const m = v.joints[n], j = active && J[n];
+      if (!j || !j.visible) { m.visible = false; continue; }
+      j.getWorldPosition(m.position); m.scale.setScalar(Math.max(0.004, (j.jointRadius || 0.008) * (n.endsWith('tip') ? 0.95 : 1.05)));
+      m.visible = true;
+    }
+    BONES.forEach(([a, b], k) => {
+      const m = v.bones[k], ja = v.joints[a], jb = v.joints[b];
+      if (!ja.visible || !jb.visible) { m.visible = false; return; }
+      _a.copy(ja.position); _b.copy(jb.position); const len = _a.distanceTo(_b);
+      m.position.copy(_a).add(_b).multiplyScalar(0.5);
+      m.quaternion.setFromUnitVectors(_up, _b.sub(_a).normalize());
+      const r = Math.min(ja.scale.x, jb.scale.x) * 0.8; m.scale.set(r, len, r); m.visible = true;
+    });
+  }
+}
 const tmpM = new THREE.Matrix4(), o = new THREE.Vector3(), d = new THREE.Vector3();
 const stickT = new Map();
 function updateSticks(dt) {
@@ -1316,7 +1356,7 @@ renderer.setAnimationLoop(() => {
   updateVisuals(dt);
   checkSteps();
   if (S.toastT > 0) { S.toastT -= dt; if (S.toastT <= 0) dirty = true; }
-  if (renderer.xr.isPresenting) { updateControllers(); updateSticks(dt); }
+  if (renderer.xr.isPresenting) { updateControllers(); updateSticks(dt); updateHands(); }
   updateButtons(dt);
   rdAcc += dt;
   if (rdAcc > 0.2) { rdAcc = 0; const r = measure(); if (r !== S.reading) { S.reading = r; drawMeter(); drawReadLabel(); dirty = true; } }
