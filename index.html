@@ -655,8 +655,12 @@ function drawControls() {
   btn('auto', X, y, 290, 44, 'Auto ' + NREP + ' puntos', { fs: 21 }); btn('trace', X + 298, y, 290, 44, 'Unir mis puntos', { on: S.trace, fs: 21 }); y += 58;
 
   sect('Práctica');
-  btn('tup', X, y, 140, 40, 'Mesa ↑', { fs: 19 }); btn('tdn', X + 148, y, 140, 40, 'Mesa ↓', { fs: 19 });
-  btn('tnear', X + 298, y, 141, 40, 'Acercar', { fs: 19 }); btn('tfar', X + 447, y, 141, 40, 'Alejar', { fs: 19 }); y += 48;
+  { const bw = 78, gp = (W - 7 * bw) / 6, bx = i => X + i * (bw + gp);
+    btn('tup', bx(0), y, bw, 40, 'Mesa ↑', { fs: 16 }); btn('tdn', bx(1), y, bw, 40, 'Mesa ↓', { fs: 16 });
+    btn('tnear', bx(2), y, bw, 40, 'Acercar', { fs: 16 }); btn('tfar', bx(3), y, bw, 40, 'Alejar', { fs: 16 });
+    btn('rotl', bx(4), y, bw, 40, '⟲ 30°', { fs: 16, bg: '#24318a' }); btn('rotr', bx(5), y, bw, 40, '⟳ 30°', { fs: 16, bg: '#24318a' });
+    btn('center', bx(6), y, bw, 40, 'Centrar', { fs: 16, bg: '#24318a' }); }
+  y += 48;
   if (S.teacher) {
     btn('teq', X, y, 190, 42, 'Equipotenciales', { on: S.showEq, bg: '#3d2a7a', fs: 18 });
     btn('tfl', X + 199, y, 190, 42, 'Líneas de campo', { on: S.showField, bg: '#3d2a7a', fs: 18 });
@@ -714,7 +718,7 @@ function drawObjetivos(x, y, w) {
   [['Mover la sonda', 'Apunte a la placa: la sonda sigue el rayo con suavidad, en pasos de 1 mm. El gatillo la FIJA; ajústela 1 mm con el joystick o las flechas del panel.'],
     ['Registrar', 'Si la lectura ya es el voltaje buscado (±0,10 V) el gatillo registra el punto; si no, ajuste con el joystick y pulse REGISTRAR (mesa o panel).'],
     ['Botonera de la mesa', 'ENCENDER / APAGAR la fuente, PUNTUALES / PLACAS cambian la configuración y SALIR cierra la sesión VR. Se pulsan tocándolos.'],
-    ['Pantalla', 'Toque una zona libre del panel para acercarlo; otro toque lo devuelve a su sitio.'],
+    ['Moverse', 'Con la sonda libre: joystick izquierdo = caminar, derecho = girar 30°. Con las manos: ⟲ ⟳ y Centrar en el panel. Toque el panel para acercarlo.'],
     ['Pasos', 'La pestaña Procedimiento marca cada paso cumplido. Las líneas teóricas solo las muestra el docente al final.']]
     .forEach(([t, d]) => { txt(t, x, y, 23, NF.azul, true); y = wrap(d, x + 250, y, w - 260, 22, NF.texto, 30) + 12; });
 }
@@ -1065,6 +1069,9 @@ function act(id, hit) {
     case 'nu': nudge(0, 1); break;
     case 'nd': nudge(0, -1); break;
     case 'exit': pressAnim('exit'); if (current) current.end(); else toast('El botón SALIR cierra la sesión de realidad virtual.'); break;
+    case 'rotl': turnUser(30); break;
+    case 'rotr': turnUser(-30); break;
+    case 'center': if (renderer.xr.isPresenting) { centerUser(); if (vrFocus) toggleVRFocus(); toast('Posición inicial restablecida.'); } else resetView(); break;
     case 'tup': S.tableY = Math.min(0.25, S.tableY + 0.05); break;
     case 'tdn': S.tableY = Math.max(-0.35, S.tableY - 0.05); break;
     case 'tnear': S.tableZ = Math.min(0.4, S.tableZ + 0.1); break;
@@ -1194,11 +1201,48 @@ function updateHands() {
 }
 const tmpM = new THREE.Matrix4(), o = new THREE.Vector3(), d = new THREE.Vector3();
 const stickT = new Map();
+// ---- desplazamiento en VR: se mueve el espacio de referencia (el mundo queda fijo)
+let baseRef = null;
+const rig = new THREE.Matrix4();                       // pose del estudiante respecto del espacio físico
+const _rm = new THREE.Matrix4(), _rp = new THREE.Vector3(), _rq = new THREE.Quaternion(), _rs = new THREE.Vector3();
+function applyRig() {
+  if (!baseRef) return;
+  _rm.copy(rig).invert().decompose(_rp, _rq, _rs);
+  renderer.xr.setReferenceSpace(baseRef.getOffsetReferenceSpace(new XRRigidTransform({ x: _rp.x, y: _rp.y, z: _rp.z }, { x: _rq.x, y: _rq.y, z: _rq.z, w: _rq.w })));
+}
+function headPos() { const p = new THREE.Vector3(); renderer.xr.getCamera().getWorldPosition(p); return p; }
+function turnUser(deg) {
+  if (!renderer.xr.isPresenting) { orbit.yaw += THREE.MathUtils.degToRad(deg); applyOrbit(); return; }
+  const h = headPos();
+  const T = new THREE.Matrix4().makeTranslation(h.x, 0, h.z), R = new THREE.Matrix4().makeRotationY(THREE.MathUtils.degToRad(deg)), Ti = new THREE.Matrix4().makeTranslation(-h.x, 0, -h.z);
+  rig.premultiply(Ti).premultiply(R).premultiply(T); applyRig();
+}
+function moveUser(fx, sx, dist) {                      // fx: adelante, sx: derecha (en la dirección de la mirada)
+  const dir = new THREE.Vector3(); renderer.xr.getCamera().getWorldDirection(dir); dir.y = 0;
+  if (dir.lengthSq() < 1e-6) return; dir.normalize();
+  const right = new THREE.Vector3(-dir.z, 0, dir.x);
+  const mv = dir.multiplyScalar(fx * dist).add(right.multiplyScalar(sx * dist));
+  rig.premultiply(new THREE.Matrix4().makeTranslation(mv.x, 0, mv.z)); applyRig();
+}
+function centerUser() { rig.identity(); applyRig(); }
+const turnCool = new Map();
 function updateSticks(dt) {
   const ses = renderer.xr.getSession(); if (!ses) return;
   for (const src of ses.inputSources) {
     const gp = src.gamepad; if (!gp || gp.axes.length < 4) continue;
     const ax = gp.axes[2], ay = gp.axes[3], on = Math.abs(ax) > 0.6 || Math.abs(ay) > 0.6;
+    if (!S.probe.lock) {                               // sonda libre → caminar (izquierdo) y girar (derecho)
+      if (src.handedness === 'left') {
+        const mx = Math.abs(ax) > 0.2 ? ax : 0, my = Math.abs(ay) > 0.2 ? ay : 0;
+        if (mx || my) moveUser(-my, mx, 1.1 * dt);
+      } else {
+        let c = turnCool.get(src) ?? 0; c -= dt;
+        if (Math.abs(ax) > 0.7 && c <= 0) { turnUser(ax > 0 ? -30 : 30); c = 0.35; }
+        if (Math.abs(ax) < 0.3) c = 0;
+        turnCool.set(src, c);
+      }
+      stickT.set(src, 0); continue;
+    }
     let t = stickT.get(src) ?? 0;
     if (!on) { stickT.set(src, 0); continue; }
     t -= dt;
@@ -1276,6 +1320,7 @@ function toggleVRFocus() {
   panel.rotation.set(0, Math.atan2(-dd.x, -dd.z), 0); vrFocus = true;
 }
 function resetView() {
+  if (renderer.xr.isPresenting) centerUser();
   focusSaved = null; document.body.classList.remove('nf-focus'); S.tableY = 0; S.tableZ = 0; dirty = true;
   if (vrFocus) toggleVRFocus();
   animateOrbit({ target: ORBIT0.target.clone(), yaw: ORBIT0.yaw, pitch: ORBIT0.pitch, dist: ORBIT0.dist });
@@ -1328,10 +1373,11 @@ async function start(mode) {
     const s = await navigator.xr.requestSession(mode, { optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking'] });
     renderer.xr.setReferenceSpaceType('local-floor');
     await renderer.xr.setSession(s); current = s;
+    baseRef = renderer.xr.getReferenceSpace(); rig.identity();
     const isAR = mode === 'immersive-ar';
     room.visible = !isAR; scene.background = isAR ? null : BG;
     ui.style.display = 'none';
-    s.addEventListener('end', () => { current = null; room.visible = true; scene.background = BG; ui.style.display = ''; if (vrFocus) toggleVRFocus(); applyOrbit(); });
+    s.addEventListener('end', () => { current = null; baseRef = null; rig.identity(); room.visible = true; scene.background = BG; ui.style.display = ''; if (vrFocus) toggleVRFocus(); applyOrbit(); });
   } catch (err) { document.getElementById('msg').textContent = 'No se pudo iniciar: ' + err.message; }
 }
 async function setupXR() {
