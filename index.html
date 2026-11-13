@@ -67,7 +67,7 @@
   <button id="bhome">Portada</button>
 </div>
 <button id="breset" title="Volver a la vista inicial">⟲ Vista inicial</button>
-<div id="help"><b>Modo 3D</b><br>Arrastre para girar · clic derecho o Shift para desplazar · rueda para acercar · mueva el ratón sobre la placa para llevar la sonda y haga clic para registrar · clic en el panel, la fuente, el multímetro y los botones de la mesa.</div>
+<div id="help"><b>Modo 3D</b><br>Arrastre para girar · clic derecho o Shift para desplazar · rueda para acercar · mueva el ratón sobre la placa para llevar la sonda; clic = fijar (o registrar si ya marca el voltaje); flechas del teclado = 1 mm; Enter = registrar; espacio = fijar/soltar · clic en el panel, la fuente, el multímetro y los botones de la mesa.</div>
 <script>
 const show3D = on => { document.getElementById('xr').style.display = on ? 'none' : ''; for (const id of ['top', 'help', 'breset']) document.getElementById(id).style.display = on ? (id === 'top' ? 'flex' : 'block') : 'none'; };
 document.getElementById('b3d').onclick = () => show3D(true);
@@ -204,7 +204,7 @@ const fieldC = m => CACHE['F' + m] || (CACHE['F' + m] = fieldLines(m));
 function emptyData() { const d = { point: {}, plates: {} }; for (const m of ['point', 'plates']) for (const v of TARGETS[m]) d[m][v] = []; return d; }
 const S = {
   mode: 'point', supplyOn: false, V0: 10, meterOn: false, water: 0, waterTarget: 0,
-  probe: { on: false, x: 0, y: 0 }, reading: null, noise: 0, lastReadT: 0,
+  probe: { on: false, x: 0, y: 0, lock: false }, praw: null, ptgt: null, reading: null, noise: 0, lastReadT: 0,
   tIdx: { point: 0, plates: 0 }, data: emptyData(), assisted: { point: {}, plates: {} },
   steps: { point: new Array(8).fill(false), plates: new Array(6).fill(false) },
   teacher: false, pinPad: false, pinBuf: '', pinFails: 0, pinLock: 0, showEq: false, showField: false, trace: false,
@@ -408,6 +408,8 @@ const probe = new THREE.Group(); tray.add(probe); probe.rotation.x = 0.35; probe
   const guard = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, 0.004, 16), M(0xaa1111)); guard.position.y = 0.03; probe.add(guard);
 }
 const probeTop = new THREE.Vector3(0, 0.122, 0);
+const lockRing = new THREE.Mesh(new THREE.RingGeometry(0.006, 0.009, 32), new THREE.MeshBasicMaterial({ color: 0x00d4fd, side: THREE.DoubleSide, depthTest: false }));
+lockRing.rotation.x = -Math.PI / 2; lockRing.renderOrder = 5; lockRing.visible = false; tray.add(lockRing);
 let fixedCables = null, probeCable = null;
 function buildCables() {
   if (fixedCables) deck.remove(fixedCables);
@@ -443,7 +445,7 @@ function drawReadLabel() {
   k.fillStyle = 'rgba(2,6,40,0.94)'; roundRect(k, 0, 0, 512, 160, 26); k.fill();
   k.strokeStyle = live ? NF.cian : NF.violeta; k.lineWidth = 5; roundRect(k, 3, 3, 506, 154, 24); k.stroke();
   k.fillStyle = '#AEB9E6'; k.font = `600 26px ${FB}`; k.textAlign = 'center';
-  k.fillText(S.probe.on ? `Multímetro · x = ${S.probe.x.toFixed(1).replace('.', ',')}  y = ${S.probe.y.toFixed(1).replace('.', ',')} cm` : 'Multímetro', 256, 40);
+  k.fillText(S.probe.on ? `${S.probe.lock ? 'FIJA · ' : ''}x = ${S.probe.x.toFixed(1).replace('.', ',')}  y = ${S.probe.y.toFixed(1).replace('.', ',')} cm` : 'Multímetro', 256, 40);
   k.fillStyle = live ? NF.cian : '#7E8BBE'; k.font = `700 84px ${FT}`; k.fillText(S.meterOn ? fmtV(S.reading) + ' V' : 'APAGADO', 256, 128); rdTex.needsUpdate = true;
 }
 
@@ -638,7 +640,12 @@ function drawControls() {
   ctx.font = `700 50px ${FT}`; ctx.fillStyle = S.meterOn ? (ok ? NF.cian : '#FFFFFF') : '#56628F';
   ctx.fillText(S.meterOn ? fmtV(S.reading) + ' V' : 'APAGADO', X + 20, y + 58);
   txt('Sonda (A = ±0,1 cm)', X + 330, y + 30, 17, L);
-  txt(S.probe.on ? `x = ${f(S.probe.x, 1)}   y = ${f(S.probe.y, 1)}` : 'fuera de la placa', X + 330, y + 62, 22, '#fff', true); y += 94;
+  txt(S.probe.on ? `x = ${f(S.probe.x, 1)}   y = ${f(S.probe.y, 1)}` : 'fuera de la placa', X + 330, y + 62, 22, '#fff', true);
+  if (S.probe.lock) { ctx.fillStyle = NF.cian; roundRect(ctx, X + 236, y + 26, 78, 28, 14); ctx.fill(); txt('FIJA', X + 275, y + 46, 17, NF.noche, true, 'center', FT); }
+  y += 88;
+  btn('plock', X, y, 204, 42, S.probe.lock ? 'Soltar sonda' : 'Fijar sonda', { on: S.probe.lock, fs: 19 });
+  btn('nl', X + 212, y, 88, 42, '← 1 mm', { fs: 17 }); btn('nr', X + 306, y, 88, 42, '→ 1 mm', { fs: 17 });
+  btn('nu', X + 400, y, 88, 42, '↑ 1 mm', { fs: 17 }); btn('nd', X + 494, y, 94, 42, '↓ 1 mm', { fs: 17 }); y += 54;
 
   sect('Registro de coordenadas');
   const v = target(), cnt = S.data[S.mode][v].length;
@@ -704,8 +711,8 @@ function drawObjetivos(x, y, w) {
   ['Observar los cambios de potencial.', 'Encontrar y dibujar las líneas equipotenciales.', 'Comprobar experimentalmente el campo eléctrico.']
     .forEach((o, i) => { badge(i + 1, x, y); y = wrap(o, x + 52, y, w - 60, 25, NF.tinta, 34) + 16; });
   y += 16; y = h2('Cómo usar el simulador', x, y);
-  [['Mover la sonda', 'Apunte con el mando (o la mano) a la placa milimetrada: la sonda sigue el rayo y el multímetro marca el potencial respecto de B.'],
-    ['Registrar', 'Con la lectura igual al voltaje buscado (±0,10 V), pulse el gatillo sobre la placa, el botón REGISTRAR de la mesa o «Registrar punto».'],
+  [['Mover la sonda', 'Apunte a la placa: la sonda sigue el rayo con suavidad, en pasos de 1 mm. El gatillo la FIJA; ajústela 1 mm con el joystick o las flechas del panel.'],
+    ['Registrar', 'Si la lectura ya es el voltaje buscado (±0,10 V) el gatillo registra el punto; si no, ajuste con el joystick y pulse REGISTRAR (mesa o panel).'],
     ['Botonera de la mesa', 'ENCENDER / APAGAR la fuente, PUNTUALES / PLACAS cambian la configuración y SALIR cierra la sesión VR. Se pulsan tocándolos.'],
     ['Pantalla', 'Toque una zona libre del panel para acercarlo; otro toque lo devuelve a su sitio.'],
     ['Pasos', 'La pestaña Procedimiento marca cada paso cumplido. Las líneas teóricas solo las muestra el docente al final.']]
@@ -936,11 +943,40 @@ function drawPinPad(x, y, w) {
 }
 
 // ---------------------------------------------------------------- acciones
-function setProbeFromPoint(pt) {
-  const l = tray.worldToLocal(pt.clone()); let x = l.x * 100, y = -l.z * 100;
-  x = Math.max(-TRAY_W / 2 + 0.2, Math.min(TRAY_W / 2 - 0.2, x)); y = Math.max(-TRAY_H / 2 + 0.2, Math.min(TRAY_H / 2 - 0.2, y));
+// ---- sonda: suavizado del rayo, pasos de 1 mm, fijación y ajuste fino
+const clampX = x => Math.max(-TRAY_W / 2 + 0.2, Math.min(TRAY_W / 2 - 0.2, x));
+const clampY = y => Math.max(-TRAY_H / 2 + 0.2, Math.min(TRAY_H / 2 - 0.2, y));
+const mm = v => Math.round(v * 10) / 10;
+// how: 'ray' (mando/mano: suavizado), 'mouse' (directo), 'fix' (fija la sonda en ese punto)
+function setProbeFromPoint(pt, how = 'ray') {
+  if (how !== 'fix' && S.probe.lock) return;
+  const l = tray.worldToLocal(pt.clone()); const x = clampX(l.x * 100), y = clampY(-l.z * 100);
   if (insideElectrode(S.mode, x, y)) return;
-  S.probe.on = true; S.probe.x = x; S.probe.y = y;
+  if (how === 'ray' && S.probe.on && S.praw) { S.ptgt = { x, y }; return; }
+  S.ptgt = null; S.praw = { x, y }; S.probe.on = true; S.probe.x = mm(x); S.probe.y = mm(y);
+  if (how === 'fix') S.probe.lock = true;
+}
+function smoothProbe(dt) {
+  if (!S.ptgt || S.probe.lock || !S.praw) return;
+  const a = 1 - Math.exp(-dt / 0.16);                       // filtro de paso bajo (≈0,16 s)
+  S.praw.x += (S.ptgt.x - S.praw.x) * a; S.praw.y += (S.ptgt.y - S.praw.y) * a;
+  // histéresis: solo cambia de milímetro cuando el rayo se aleja más de 0,7 mm
+  if (Math.abs(S.praw.x - S.probe.x) > 0.07) S.probe.x = mm(S.praw.x);
+  if (Math.abs(S.praw.y - S.probe.y) > 0.07) S.probe.y = mm(S.praw.y);
+}
+function nudge(dx, dy) {
+  if (!S.probe.on) { toast('Primero coloque la sonda sobre la placa.'); return; }
+  const x = mm(clampX(S.probe.x + dx * 0.1)), y = mm(clampY(S.probe.y + dy * 0.1));
+  if (insideElectrode(S.mode, x, y)) return;
+  S.probe.x = x; S.probe.y = y; S.praw = { x, y }; S.ptgt = null; S.probe.lock = true;
+  S.reading = measure(); drawMeter(); drawReadLabel(); dirty = true;
+}
+function fixAt(point) {
+  setProbeFromPoint(point, 'fix');
+  if (!S.probe.on) return;
+  const v = target(), r = measure(); S.reading = r; drawMeter(); drawReadLabel();
+  if (S.meterOn && S.supplyOn && S.water >= 1 && r != null && Math.abs(r - v) <= TOL && S.data[S.mode][v].length < NREP) { record(); return; }
+  toast(`Sonda fija en (${f(S.probe.x, 1)} ; ${f(S.probe.y, 1)}) cm. Ajuste 1 mm con el joystick o las flechas y pulse REGISTRAR.`);
 }
 function measure() {
   if (!S.meterOn) return null;
@@ -955,11 +991,11 @@ function record() {
   if (!S.meterOn) { toast('Encienda el multímetro.'); return; }
   if (!S.probe.on) { toast('Apunte la sonda a la placa milimetrada.'); return; }
   if (arr.length >= NREP) { toast(`Ya tiene ${NREP} coordenadas de ${v} V. Seleccione otro voltaje.`); return; }
-  const r = measure(); S.reading = r;
+  const r = measure(); S.reading = r; drawMeter(); drawReadLabel();
   if (Math.abs(r - v) > TOL) { toast(`La sonda marca ${fmtV(r)} V: busque un punto que marque ${v} V (±0,10 V).`); return; }
   const p = { x: Math.round(S.probe.x * 10) / 10, y: Math.round(S.probe.y * 10) / 10 };
   if (arr.some(q => Math.hypot(q.x - p.x, q.y - p.y) < 1)) { toast('Ese punto está a menos de 1 cm de otro ya registrado.'); return; }
-  arr.push(p); save(); rebuildPoints(); pressAnim('rec');
+  arr.push(p); save(); rebuildPoints(); pressAnim('rec'); S.probe.lock = false;
   toast(`${v} V → (${f(p.x, 1)} ; ${f(p.y, 1)}) cm registrado (${arr.length}/${NREP}).`);
   if (arr.length >= NREP) { const T = TARGETS[S.mode], nx = T.findIndex(t => S.data[S.mode][t].length < NREP); if (nx >= 0) S.tIdx[S.mode] = nx; }
 }
@@ -1002,7 +1038,7 @@ function pinKey(k) {
 function act(id, hit) {
   dirty = true;
   if (id === 'panelFocus') { toggleFocus(); return; }
-  if (id === 'plate') { if (hit) setProbeFromPoint(hit.point); record(); return; }
+  if (id === 'plate') { if (hit) fixAt(hit.point); return; }
   if (id.startsWith('tab')) { S.tab = +id.slice(3); S.pinPad = false; return; }
   if (id.startsWith('sub')) { S.sub = +id.slice(3); return; }
   if (id.startsWith('col')) { const m = id.startsWith('colpoint') ? 'point' : 'plates'; const i = +id.slice(m === 'point' ? 8 : 9); setMode(m); S.tIdx[m] = i; return; }
@@ -1023,6 +1059,11 @@ function act(id, hit) {
     case 'del': { const a = S.data[S.mode][target()]; if (a.length) { a.pop(); delete S.assisted[S.mode][target()]; save(); rebuildPoints(); } else toast('No hay coordenadas que borrar en ' + target() + ' V.'); break; }
     case 'auto': autoPoints(); break;
     case 'trace': S.trace = !S.trace; break;
+    case 'plock': if (!S.probe.on) toast('Primero coloque la sonda sobre la placa.'); else { S.probe.lock = !S.probe.lock; S.ptgt = null; S.praw = { x: S.probe.x, y: S.probe.y }; } break;
+    case 'nl': nudge(-1, 0); break;
+    case 'nr': nudge(1, 0); break;
+    case 'nu': nudge(0, 1); break;
+    case 'nd': nudge(0, -1); break;
     case 'exit': pressAnim('exit'); if (current) current.end(); else toast('El botón SALIR cierra la sesión de realidad virtual.'); break;
     case 'tup': S.tableY = Math.min(0.25, S.tableY + 0.05); break;
     case 'tdn': S.tableY = Math.max(-0.35, S.tableY - 0.05); break;
@@ -1034,7 +1075,7 @@ function act(id, hit) {
     case 'teq': S.showEq = !S.showEq; rebuildOverlays(); break;
     case 'tfl': S.showField = !S.showField; rebuildOverlays(); break;
     case 'reset':
-      Object.assign(S, { supplyOn: false, V0: 10, meterOn: false, waterTarget: 0, water: 0, probe: { on: false, x: 0, y: 0 }, reading: null,
+      Object.assign(S, { supplyOn: false, V0: 10, meterOn: false, waterTarget: 0, water: 0, probe: { on: false, x: 0, y: 0, lock: false }, praw: null, ptgt: null, reading: null,
         tIdx: { point: 0, plates: 0 }, data: emptyData(), assisted: { point: {}, plates: {} },
         steps: { point: new Array(8).fill(false), plates: new Array(6).fill(false) }, showEq: false, showField: false, trace: false, tab: 3, sub: 0 });
       save(); rebuildPoints(); rebuildOverlays(); if (S.mode !== 'point') setMode('point'); break;
@@ -1071,7 +1112,9 @@ function updateVisuals(dt) {
   supStateMesh.visible = metStateMesh.visible = !(focusSaved || vrFocus);
   lblSup('Fuente de poder', S.supplyOn, S.supplyOn ? 'ENCENDIDA' : 'APAGADA', S.supplyOn ? ' ' + f(S.V0, 1) + ' V' : '');
   lblMet('Multímetro', S.meterOn, S.meterOn ? 'ENCENDIDO' : 'APAGADO');
+  smoothProbe(dt);
   probe.visible = S.probe.on;
+  lockRing.visible = S.probe.on && S.probe.lock; if (lockRing.visible) lockRing.position.copy(cm2l(S.probe.x, S.probe.y, PLATE_Y + 0.0025));
   const key = S.probe.on ? S.probe.x.toFixed(2) + ',' + S.probe.y.toFixed(2) : 'off';
   if (key !== lastProbeKey) { lastProbeKey = key; if (S.probe.on) probe.position.copy(cm2l(S.probe.x, S.probe.y, PLATE_Y)); updateProbeCable(); dirty = true; }
 }
@@ -1110,6 +1153,22 @@ for (let i = 0; i < 2; i++) {
   c.addEventListener('connected', e => { gm.visible = !e.data.hand; });
 }
 const tmpM = new THREE.Matrix4(), o = new THREE.Vector3(), d = new THREE.Vector3();
+const stickT = new Map();
+function updateSticks(dt) {
+  const ses = renderer.xr.getSession(); if (!ses) return;
+  for (const src of ses.inputSources) {
+    const gp = src.gamepad; if (!gp || gp.axes.length < 4) continue;
+    const ax = gp.axes[2], ay = gp.axes[3], on = Math.abs(ax) > 0.6 || Math.abs(ay) > 0.6;
+    let t = stickT.get(src) ?? 0;
+    if (!on) { stickT.set(src, 0); continue; }
+    t -= dt;
+    if (t <= 0) {
+      if (Math.abs(ax) >= Math.abs(ay)) nudge(Math.sign(ax), 0); else nudge(0, -Math.sign(ay));
+      t = (stickT.get(src) ?? 0) === 0 ? 0.35 : 0.12;          // primer paso, luego repetición
+    }
+    stickT.set(src, t);
+  }
+}
 function updateControllers() {
   let newHover = null;
   for (const c of ctrls) {
@@ -1203,7 +1262,7 @@ window.addEventListener('pointermove', e => {
   } else {
     if (e.target !== renderer.domElement) return;
     const r = mousePick(e); const id = r && r.id;
-    if (id === 'plate') setProbeFromPoint(r.point);
+    if (id === 'plate') setProbeFromPoint(r.point, 'mouse');
     renderer.domElement.style.cursor = id === 'panelFocus' ? (focusSaved ? 'zoom-out' : 'zoom-in') : (id === 'plate' ? 'crosshair' : (id ? 'pointer' : 'grab'));
     if (id !== hover) { hover = id; dirty = true; }
   }
@@ -1211,6 +1270,13 @@ window.addEventListener('pointermove', e => {
 window.addEventListener('pointerup', e => { if (drag && moved < 6 && !renderer.xr.isPresenting) { const r = mousePick(e); if (r && r.id) act(r.id, r); } drag = null; });
 renderer.domElement.addEventListener('contextmenu', e => e.preventDefault());
 renderer.domElement.addEventListener('wheel', e => { e.preventDefault(); orbit.dist = Math.max(0.3, Math.min(4, orbit.dist * (1 + Math.sign(e.deltaY) * 0.08))); applyOrbit(); }, { passive: false });
+window.addEventListener('keydown', e => {
+  if (renderer.xr.isPresenting || document.getElementById('xr').style.display !== 'none') return;
+  const k = e.key;
+  if (k === 'ArrowLeft') nudge(-1, 0); else if (k === 'ArrowRight') nudge(1, 0); else if (k === 'ArrowUp') nudge(0, 1); else if (k === 'ArrowDown') nudge(0, -1);
+  else if (k === 'Enter') act('rec'); else if (k === ' ') act('plock'); else return;
+  e.preventDefault(); dirty = true;
+});
 window.addEventListener('resize', () => { camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight); });
 
 // ---------------------------------------------------------------- botones de entrada XR
@@ -1250,7 +1316,7 @@ renderer.setAnimationLoop(() => {
   updateVisuals(dt);
   checkSteps();
   if (S.toastT > 0) { S.toastT -= dt; if (S.toastT <= 0) dirty = true; }
-  if (renderer.xr.isPresenting) updateControllers();
+  if (renderer.xr.isPresenting) { updateControllers(); updateSticks(dt); }
   updateButtons(dt);
   rdAcc += dt;
   if (rdAcc > 0.2) { rdAcc = 0; const r = measure(); if (r !== S.reading) { S.reading = r; drawMeter(); drawReadLabel(); dirty = true; } }
